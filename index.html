@@ -261,7 +261,7 @@ details.notes p{margin:0 0 7px}
       <p><b>Universe:</b> by default the scan covers the top 50 / 100 / 200 coins by market cap (CoinGecko ranking, with CoinPaprika as automatic fallback; BTC / stablecoins / wrapped and pegged tokens excluded when the toggle is on). Each coin is matched to its USDT pair on the selected exchange by ticker (1000-prefixed contracts included). Coins that are not listed on that exchange market are skipped, so the scanned count can be lower than the universe size. Switch &ldquo;Rank by&rdquo; to 24h volume to take the most liquid pairs on the exchange instead.</p>
       <p><b>Method:</b> each asset is compared over the exact same start/end window; manual Start/End dates and times use New York time (America/New_York, DST-aware). In <b>Daily open</b> mode, the start is the most recent <b>7:00 PM New York</b> open and the end is the exact scan time. If the scan is before 7:00 PM NY, the start is 7:00 PM from the previous NY calendar day. <b>RS vs BTC</b> = Alt Return &minus; BTC Return. <b>RS vs ETH</b> = Alt Return &minus; ETH Return. <b>Composite RS</b> = (RS vs BTC + RS vs ETH) / 2. A positive composite means the alt outperformed the two benchmarks on average. The &ldquo;Beat BTC + ETH&rdquo; count requires both individual spreads to be positive. These are relative-performance measures, not predictions. Market cap is a current snapshot and 24h volume is the last 24 hours, not measured over the selected window.</p>
       <p><b>Return buckets:</b> the charts count how many scanned coins fall into each percentage-return bucket. Alt Return uses each coin&rsquo;s selected-window return. Relative Strength uses the <b>Composite RS</b>, the average of RS vs BTC and RS vs ETH. The default bucket size is 2 percentage points; tail buckets are 3 bucket-widths wide (for example, ≤−6%, −6→−4%, …, +4→+6%, ≥+6% at 2%). The exact bucket boundaries are defined by this screener and are not claimed to be Velo&rsquo;s undocumented internal boundaries.</p>
-      <p><b>Data:</b> public exchange market APIs plus CoinGecko&rsquo;s public /coins/markets endpoint for market cap, falling back to CoinPaprika&rsquo;s /tickers if CoinGecko is rate-limited or unreachable (cached for 5 minutes). Binance Spot uses api.binance.com, Binance USDT perpetuals use fapi.binance.com, and Bybit uses api.bybit.com. Historical klines and 24h ticker data are fetched live at scan time.</p>
+      <p><b>Data:</b> Vercel server-side proxy to public exchange market APIs plus CoinGecko&rsquo;s public /coins/markets endpoint for market cap, falling back to CoinPaprika&rsquo;s /tickers if CoinGecko is rate-limited or unreachable (cached for 5 minutes). Binance Spot uses api.binance.com, Binance USDT perpetuals use fapi.binance.com, and Bybit uses api.bybit.com. Historical klines and 24h ticker data are fetched live at scan time.</p>
     </div>
   </details>
 
@@ -412,8 +412,28 @@ function isExcludedBase(base){
 let mcapCache=null, mcapStale=false, mcapSource='';
 const MCAP_KEY='rs_mcap_cache_v2', MCAP_TTL=5*60*1000;
 
+// Route public market-data requests through Vercel so mobile browsers do not
+// need direct access to exchange/data-provider domains.
+async function apiFetch(input, options={}){
+  const original = new URL(typeof input === 'string' ? input : input.url);
+  const providers = {
+    'api.binance.com':'binanceSpot',
+    'fapi.binance.com':'binanceFutures',
+    'api.bybit.com':'bybit',
+    'api.coingecko.com':'coingecko',
+    'api.coinpaprika.com':'coinpaprika'
+  };
+  const provider = providers[original.hostname];
+  if(!provider) throw Error(`Unsupported market-data host: ${original.hostname}`);
+  const proxy = new URL('/api/market', location.origin);
+  proxy.searchParams.set('provider', provider);
+  proxy.searchParams.set('path', original.pathname);
+  original.searchParams.forEach((value,key)=>proxy.searchParams.append(key,value));
+  return fetch(proxy.toString(), options);
+}
+
 async function mcapFromCoinGecko(){
-  const r=await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
+  const r=await apiFetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false');
   if(!r.ok)throw Error(`HTTP ${r.status}`);
   const j=await r.json();
   if(!Array.isArray(j)||!j.length)throw Error('no data');
@@ -421,7 +441,7 @@ async function mcapFromCoinGecko(){
 }
 // Fallback source (free, no key). Normalised to the same shape as CoinGecko rows.
 async function mcapFromPaprika(){
-  const r=await fetch('https://api.coinpaprika.com/v1/tickers?quotes=USD&limit=300');
+  const r=await apiFetch('https://api.coinpaprika.com/v1/tickers?quotes=USD&limit=300');
   if(!r.ok)throw Error(`HTTP ${r.status}`);
   const j=await r.json();
   if(!Array.isArray(j)||!j.length)throw Error('no data');
@@ -459,8 +479,8 @@ async function binanceSymbols(){
   const tickerUrl = isFutures ? `${base}/fapi/v1/ticker/24hr` : `${base}/api/v3/ticker/24hr`;
 
   const [info,tick]=await Promise.all([
-    fetch(infoUrl).then(r=>{if(!r.ok)throw Error(`Binance exchangeInfo HTTP ${r.status}`);return r.json()}),
-    fetch(tickerUrl).then(r=>{if(!r.ok)throw Error(`Binance 24h ticker HTTP ${r.status}`);return r.json()})
+    apiFetch(infoUrl).then(r=>{if(!r.ok)throw Error(`Binance exchangeInfo HTTP ${r.status}`);return r.json()}),
+    apiFetch(tickerUrl).then(r=>{if(!r.ok)throw Error(`Binance 24h ticker HTTP ${r.status}`);return r.json()})
   ]);
 
   const t=new Map(tick.map(x=>[x.symbol,x]));
@@ -477,8 +497,8 @@ async function binanceSymbols(){
 
 async function bybitSymbols(){
   const category=market.value;
-  const ins=await fetch(`https://api.bybit.com/v5/market/instruments-info?category=${category}&limit=1000`).then(r=>r.json());
-  const tk=await fetch(`https://api.bybit.com/v5/market/tickers?category=${category}`).then(r=>r.json());
+  const ins=await apiFetch(`https://api.bybit.com/v5/market/instruments-info?category=${category}&limit=1000`).then(r=>r.json());
+  const tk=await apiFetch(`https://api.bybit.com/v5/market/tickers?category=${category}`).then(r=>r.json());
   if(ins.retCode!==0)throw Error(`Bybit instruments: ${ins.retMsg||ins.retCode}`);
   if(tk.retCode!==0)throw Error(`Bybit tickers: ${tk.retMsg||tk.retCode}`);
   const t=new Map((tk.result?.list||[]).map(x=>[x.symbol,x]));
@@ -540,11 +560,11 @@ async function getCurrentPrice(exchange,symbol){
     const isFutures=market.value==='linear';
     const base=isFutures?'https://fapi.binance.com':'https://api.binance.com';
     const endpoint=isFutures?'/fapi/v1/ticker/price':'/api/v3/ticker/price';
-    const j=await fetch(`${base}${endpoint}?symbol=${encodeURIComponent(symbol)}`).then(r=>{if(!r.ok)throw Error(`Binance price ${symbol} HTTP ${r.status}`);return r.json()});
+    const j=await apiFetch(`${base}${endpoint}?symbol=${encodeURIComponent(symbol)}`).then(r=>{if(!r.ok)throw Error(`Binance price ${symbol} HTTP ${r.status}`);return r.json()});
     const p=Number(j.price); if(!Number.isFinite(p))throw Error(`Invalid Binance price for ${symbol}`); return p;
   }
   const cat=market.value;
-  const j=await fetch(`https://api.bybit.com/v5/market/tickers?category=${cat}&symbol=${encodeURIComponent(symbol)}`).then(r=>{if(!r.ok)throw Error(`Bybit price ${symbol} HTTP ${r.status}`);return r.json()});
+  const j=await apiFetch(`https://api.bybit.com/v5/market/tickers?category=${cat}&symbol=${encodeURIComponent(symbol)}`).then(r=>{if(!r.ok)throw Error(`Bybit price ${symbol} HTTP ${r.status}`);return r.json()});
   if(j.retCode!==0)throw Error(`Bybit ${symbol}: ${j.retMsg||j.retCode}`);
   const p=Number(j.result?.list?.[0]?.lastPrice); if(!Number.isFinite(p))throw Error(`Invalid Bybit price for ${symbol}`); return p;
 }
@@ -554,7 +574,7 @@ async function getKline(exchange,symbol,startMs,endMs,interval){
     const base = isFutures ? 'https://fapi.binance.com' : 'https://api.binance.com';
     const endpoint = isFutures ? '/fapi/v1/klines' : '/api/v3/klines';
     const url=`${base}${endpoint}?symbol=${encodeURIComponent(symbol)}&interval=${interval}&startTime=${Math.floor(startMs)}&endTime=${Math.floor(endMs)}&limit=1000`;
-    const a=await fetch(url).then(r=>{if(!r.ok)throw Error(`Binance kline ${symbol} HTTP ${r.status}`);return r.json()});
+    const a=await apiFetch(url).then(r=>{if(!r.ok)throw Error(`Binance kline ${symbol} HTTP ${r.status}`);return r.json()});
     if(!a.length)throw Error(`No Binance candles for ${symbol}`);
     const eligible=a.filter(k=>Number(k[0])>=startMs);
     const first=eligible[0]||a[0];
@@ -563,7 +583,7 @@ async function getKline(exchange,symbol,startMs,endMs,interval){
     const cat=market.value;
     const iv={'1m':'1','5m':'5','15m':'15','1h':'60','4h':'240','1d':'D'}[interval];
     const url=`https://api.bybit.com/v5/market/kline?category=${cat}&symbol=${encodeURIComponent(symbol)}&interval=${iv}&start=${Math.floor(startMs)}&end=${Math.floor(endMs)}&limit=1000`;
-    const j=await fetch(url).then(r=>{if(!r.ok)throw Error(`Bybit kline ${symbol} HTTP ${r.status}`);return r.json()});
+    const j=await apiFetch(url).then(r=>{if(!r.ok)throw Error(`Bybit kline ${symbol} HTTP ${r.status}`);return r.json()});
     if(j.retCode!==0)throw Error(`Bybit ${symbol}: ${j.retMsg||j.retCode}`);
     const a=(j.result?.list||[]).sort((x,y)=>Number(x[0])-Number(y[0]));
     if(!a.length)throw Error(`No Bybit candles for ${symbol}`);
