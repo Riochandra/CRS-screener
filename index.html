@@ -498,7 +498,15 @@ async function binanceSymbols(){
 
 async function readApiJson(response, label){
   const raw=await response.text();
-  try{return JSON.parse(raw)}catch(_){throw Error(`${label}: server returned non-JSON (HTTP ${response.status}). ${raw.slice(0,180).replace(/\s+/g,' ')}`)}
+  let data;
+  try{data=JSON.parse(raw)}catch(_){
+    throw Error(`${label}: non-JSON response (HTTP ${response.status}). ${raw.slice(0,240).replace(/\s+/g,' ')}`);
+  }
+  if(!response.ok){
+    const detail=data.detail || data.error || data.message || JSON.stringify(data);
+    throw Error(`${label}: HTTP ${response.status}. ${String(detail).slice(0,300)}`);
+  }
+  return data;
 }
 async function bybitSymbols(){
   const category=market.value;
