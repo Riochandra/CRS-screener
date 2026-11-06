@@ -418,6 +418,7 @@ async function apiFetch(input, options={}){
   const original = new URL(typeof input === 'string' ? input : input.url);
   const providers = {
     'api.binance.com':'binanceSpot',
+    'data-api.binance.vision':'binanceSpot',
     'fapi.binance.com':'binanceFutures',
     'api.bybit.com':'bybit',
     'api.coingecko.com':'coingecko',
@@ -495,10 +496,14 @@ async function binanceSymbols(){
   return symbols.map(s=>{const tk=t.get(s.symbol);return {symbol:s.symbol,base:s.baseAsset,t:tk,vol:Number(tk.quoteVolume||0)}});
 }
 
+async function readApiJson(response, label){
+  const raw=await response.text();
+  try{return JSON.parse(raw)}catch(_){throw Error(`${label}: server returned non-JSON (HTTP ${response.status}). ${raw.slice(0,180).replace(/\s+/g,' ')}`)}
+}
 async function bybitSymbols(){
   const category=market.value;
-  const ins=await apiFetch(`https://api.bybit.com/v5/market/instruments-info?category=${category}&limit=1000`).then(r=>r.json());
-  const tk=await apiFetch(`https://api.bybit.com/v5/market/tickers?category=${category}`).then(r=>r.json());
+  const ins=await apiFetch(`https://api.bybit.com/v5/market/instruments-info?category=${category}&limit=1000`).then(r=>readApiJson(r,'Bybit instruments'));
+  const tk=await apiFetch(`https://api.bybit.com/v5/market/tickers?category=${category}`).then(r=>readApiJson(r,'Bybit tickers'));
   if(ins.retCode!==0)throw Error(`Bybit instruments: ${ins.retMsg||ins.retCode}`);
   if(tk.retCode!==0)throw Error(`Bybit tickers: ${tk.retMsg||tk.retCode}`);
   const t=new Map((tk.result?.list||[]).map(x=>[x.symbol,x]));
@@ -564,7 +569,7 @@ async function getCurrentPrice(exchange,symbol){
     const p=Number(j.price); if(!Number.isFinite(p))throw Error(`Invalid Binance price for ${symbol}`); return p;
   }
   const cat=market.value;
-  const j=await apiFetch(`https://api.bybit.com/v5/market/tickers?category=${cat}&symbol=${encodeURIComponent(symbol)}`).then(r=>{if(!r.ok)throw Error(`Bybit price ${symbol} HTTP ${r.status}`);return r.json()});
+  const j=await apiFetch(`https://api.bybit.com/v5/market/tickers?category=${cat}&symbol=${encodeURIComponent(symbol)}`).then(r=>{if(!r.ok)throw Error(`Bybit price ${symbol} HTTP ${r.status}`);return readApiJson(r,`Bybit price ${symbol}`)});
   if(j.retCode!==0)throw Error(`Bybit ${symbol}: ${j.retMsg||j.retCode}`);
   const p=Number(j.result?.list?.[0]?.lastPrice); if(!Number.isFinite(p))throw Error(`Invalid Bybit price for ${symbol}`); return p;
 }
@@ -583,7 +588,7 @@ async function getKline(exchange,symbol,startMs,endMs,interval){
     const cat=market.value;
     const iv={'1m':'1','5m':'5','15m':'15','1h':'60','4h':'240','1d':'D'}[interval];
     const url=`https://api.bybit.com/v5/market/kline?category=${cat}&symbol=${encodeURIComponent(symbol)}&interval=${iv}&start=${Math.floor(startMs)}&end=${Math.floor(endMs)}&limit=1000`;
-    const j=await apiFetch(url).then(r=>{if(!r.ok)throw Error(`Bybit kline ${symbol} HTTP ${r.status}`);return r.json()});
+    const j=await apiFetch(url).then(r=>{if(!r.ok)throw Error(`Bybit kline ${symbol} HTTP ${r.status}`);return readApiJson(r,`Bybit kline ${symbol}`)});
     if(j.retCode!==0)throw Error(`Bybit ${symbol}: ${j.retMsg||j.retCode}`);
     const a=(j.result?.list||[]).sort((x,y)=>Number(x[0])-Number(y[0]));
     if(!a.length)throw Error(`No Bybit candles for ${symbol}`);

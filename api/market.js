@@ -1,6 +1,6 @@
 const PROVIDERS = {
   binanceSpot: {
-    origin: 'https://api.binance.com',
+    origin: 'https://data-api.binance.vision',
     prefixes: ['/api/v3/'],
   },
   binanceFutures: {
@@ -50,7 +50,7 @@ module.exports = async function handler(req, res) {
     try {
       upstreamResponse = await fetch(upstream, {
         method: 'GET',
-        headers: { accept: 'application/json' },
+        headers: { accept: 'application/json', 'user-agent': 'CRS-Screener/1.0' },
         signal: controller.signal,
       });
     } finally {
@@ -58,10 +58,21 @@ module.exports = async function handler(req, res) {
     }
 
     const body = await upstreamResponse.text();
-    res.setHeader('Content-Type', upstreamResponse.headers.get('content-type') || 'application/json; charset=utf-8');
+    const contentType = upstreamResponse.headers.get('content-type') || '';
     res.setHeader('Cache-Control', `public, s-maxage=${cacheSeconds}, stale-while-revalidate=${cacheSeconds * 2}`);
     res.setHeader('X-Market-Data-Provider', providerName);
-    return res.status(upstreamResponse.status).send(body);
+    // Always return valid JSON for API errors, even if an upstream sends an HTML block page.
+    if (!upstreamResponse.ok) {
+      return res.status(upstreamResponse.status).json({ error: `${providerName} upstream HTTP ${upstreamResponse.status}`, provider: providerName, detail: body.slice(0, 500) });
+    }
+    if (!contentType.includes('json')) {
+      return res.status(502).json({ error: `${providerName} returned a non-JSON response`, provider: providerName, contentType, detail: body.slice(0, 500) });
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    try { JSON.parse(body); } catch (_) {
+      return res.status(502).json({ error: `${providerName} returned invalid JSON`, provider: providerName, detail: body.slice(0, 500) });
+    }
+    return res.status(200).send(body);
   } catch (error) {
     const timedOut = error && error.name === 'AbortError';
     return res.status(502).json({
