@@ -421,6 +421,7 @@ async function apiFetch(input, options={}){
     'data-api.binance.vision':'binanceSpot',
     'fapi.binance.com':'binanceFutures',
     'api.bybit.com':'bybit',
+    'api.bytick.com':'bybit',
     'api.coingecko.com':'coingecko',
     'api.coinpaprika.com':'coinpaprika'
   };
@@ -480,8 +481,8 @@ async function binanceSymbols(){
   const tickerUrl = isFutures ? `${base}/fapi/v1/ticker/24hr` : `${base}/api/v3/ticker/24hr`;
 
   const [info,tick]=await Promise.all([
-    apiFetch(infoUrl).then(r=>{if(!r.ok)throw Error(`Binance exchangeInfo HTTP ${r.status}`);return r.json()}),
-    apiFetch(tickerUrl).then(r=>{if(!r.ok)throw Error(`Binance 24h ticker HTTP ${r.status}`);return r.json()})
+    apiFetch(infoUrl).then(r=>readApiJson(r,'Binance exchangeInfo')),
+    apiFetch(tickerUrl).then(r=>readApiJson(r,'Binance 24h ticker'))
   ]);
 
   const t=new Map(tick.map(x=>[x.symbol,x]));

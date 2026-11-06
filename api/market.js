@@ -10,7 +10,8 @@ const PROVIDERS = {
     prefixes: ['/fapi/v1/'],
   },
   bybit: {
-    origin: 'https://api.bybit.com',
+    // Official Bybit global mainnet hosts; try the documented alternate if one is blocked.
+    origins: ['https://api.bybit.com', 'https://api.bytick.com'],
     prefixes: ['/v5/market/'],
   },
   coingecko: {
