@@ -32,6 +32,16 @@ fieldset.grp legend{padding:0 3px}
 .mode{display:flex;gap:0}
 .datetime-row{display:grid;grid-template-columns:minmax(150px,1.25fr) minmax(145px,1fr);gap:6px}
 .datetime-row input[type=date],.datetime-row select{width:100%;min-width:0;height:28px;font-size:12px;padding:2px 6px}
+.datetime-row{align-items:start}
+.time-picker{display:flex;gap:2px;width:164px;height:252px;overflow:hidden;background:#383838;padding:0}
+.time-wheel{flex:1 1 0;min-width:0;height:252px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y mandatory;scrollbar-width:none;background:#383838}
+.time-wheel::-webkit-scrollbar{display:none}
+.time-wheel.period-wheel{flex:0 0 52px}
+.time-option{height:36px;display:flex;align-items:center;justify-content:center;color:#fff;font:14px/1 var(--ui);white-space:nowrap;cursor:pointer;scroll-snap-align:center;user-select:none}
+.time-option:hover{background:#4b4b4b}
+.time-option.selected{background:#9fc5f5;color:#000;outline:1px solid #fff;outline-offset:-2px}
+.time-value{display:none!important}
+
 #startBox,#endBox{min-width:310px}
 .actions{display:flex;flex-direction:column;justify-content:flex-end;gap:6px;margin-left:auto;padding:0 2px 4px}
 
@@ -154,22 +164,32 @@ details.notes p{margin:0 0 7px}
         <label>Start &mdash; New York</label>
         <div class="datetime-row">
           <input id="startDate" type="date" aria-label="Start date, New York">
-          <select id="startTime" aria-label="Start time, New York"></select>
+          <div class="time-picker" id="startTimePicker" role="group" aria-label="Start time, New York">
+             <div class="time-wheel" data-part="hour" aria-label="Hour"></div>
+             <div class="time-wheel" data-part="minute" aria-label="Minute"></div>
+             <div class="time-wheel period-wheel" data-part="period" aria-label="AM or PM"></div>
+           </div>
+           <select id="startTime" class="time-value" aria-label="Start time, New York" tabindex="-1"></select>
         </div>
       </div>
       <div class="f" id="endBox" style="display:none">
         <label>End &mdash; New York</label>
         <div class="datetime-row">
           <input id="endDate" type="date" aria-label="End date, New York">
-          <select id="endTime" aria-label="End time, New York"></select>
+          <div class="time-picker" id="endTimePicker" role="group" aria-label="End time, New York">
+             <div class="time-wheel" data-part="hour" aria-label="Hour"></div>
+             <div class="time-wheel" data-part="minute" aria-label="Minute"></div>
+             <div class="time-wheel period-wheel" data-part="period" aria-label="AM or PM"></div>
+           </div>
+           <select id="endTime" class="time-value" aria-label="End time, New York" tabindex="-1"></select>
         </div>
       </div>
     </fieldset>
 
     <fieldset class="grp">
       <legend>Market</legend>
-      <div class="f"><label for="exchange">Exchange</label><select id="exchange"><option value="binance">Binance</option><option value="bybit">Bybit</option></select></div>
-      <div class="f"><label for="market">Market</label><select id="market"><option value="spot">Spot</option><option value="linear">Perpetual / Linear</option></select></div>
+      <div class="f"><label for="exchange">Exchange</label><select id="exchange"><option value="binance" selected>Binance</option><option value="bybit">Bybit</option></select></div>
+      <div class="f"><label for="market">Market</label><select id="market"><option value="spot">Spot</option><option value="linear" selected>Perpetual / Linear</option></select></div>
     </fieldset>
 
     <fieldset class="grp">
@@ -292,14 +312,78 @@ const NY_TZ = 'America/New_York';
 // Use scrollable time dropdowns instead of manually typing times.
 // Every minute is available so existing time-window precision is preserved.
 function initTimeDropdowns(){
-  const options = Array.from({length:1440},(_,minute)=>{
-    const h=Math.floor(minute/60), m=minute%60;
-    const value=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-    const label=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-    return `<option value="${value}">${label}</option>`;
-  }).join('');
-  document.getElementById('startTime').innerHTML=options;
-  document.getElementById('endTime').innerHTML=options;
+  const minuteOptions=Array.from({length:60},(_,i)=>String(i).padStart(2,'0'));
+  const hourOptions=Array.from({length:12},(_,i)=>String(i+1).padStart(2,'0'));
+  for(const prefix of ['start','end']){
+    const select=document.getElementById(prefix+'Time');
+    select.innerHTML=Array.from({length:1440},(_,minute)=>{
+      const h=Math.floor(minute/60), m=minute%60;
+      const value=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      return `<option value="${value}">${value}</option>`;
+    }).join('');
+    const picker=document.getElementById(prefix+'TimePicker');
+    const wheelData={hour:hourOptions,minute:minuteOptions,period:['AM','PM']};
+    for(const wheel of picker.querySelectorAll('.time-wheel')){
+      const part=wheel.dataset.part;
+      wheel.innerHTML=wheelData[part].map(value=>
+        `<div class="time-option" data-value="${value}" role="button" tabindex="0">${value}</div>`
+      ).join('');
+      wheel.addEventListener('click',e=>{
+        const option=e.target.closest('.time-option');
+        if(option)chooseWheelValue(prefix,part,option.dataset.value);
+      });
+      wheel.addEventListener('scroll',()=>{
+        const index=Math.max(0,Math.min(wheel.children.length-1,
+          Math.round((wheel.scrollTop+wheel.clientHeight/2-18)/36)));
+        const option=wheel.children[index];
+        if(!option)return;
+        const select=document.getElementById(prefix+'Time');
+        const [oldHour,oldMinute]=(select.value||'00:00').split(':').map(Number);
+        let h=oldHour,m=oldMinute;
+        const v=option.dataset.value;
+        if(part==='hour')h=(Number(v)%12)+(oldHour>=12?12:0);
+        else if(part==='minute')m=Number(v);
+        else h=(oldHour%12)+(v==='PM'?12:0);
+        select.value=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+        for(const item of wheel.children)item.classList.toggle('selected',item===option);
+      });
+      wheel.addEventListener('keydown',e=>{
+        if(e.key==='Enter'||e.key===' '){
+          const option=e.target.closest('.time-option');
+          if(option){e.preventDefault();chooseWheelValue(prefix,part,option.dataset.value);}
+        }
+      });
+    }
+  }
+}
+function chooseWheelValue(prefix,part,value){
+  const select=document.getElementById(prefix+'Time');
+  const current=select.value||'00:00';
+  let [h,m]=current.split(':').map(Number);
+  if(part==='hour'){
+    const period=h>=12?'PM':'AM';
+    h=(Number(value)%12)+(period==='PM'?12:0);
+  }else if(part==='minute')m=Number(value);
+  else{
+    const hour12=h%12;
+    h=hour12+(value==='PM'?12:0);
+  }
+  const next=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  select.value=next;
+  updateTimePicker(prefix,next);
+}
+function updateTimePicker(prefix,value){
+  const [h,m]=value.split(':').map(Number);
+  const values={hour:String((h%12)||12).padStart(2,'0'),minute:String(m).padStart(2,'0'),period:h>=12?'PM':'AM'};
+  const picker=document.getElementById(prefix+'TimePicker');
+  for(const wheel of picker.querySelectorAll('.time-wheel')){
+    const selected=values[wheel.dataset.part];
+    for(const option of wheel.querySelectorAll('.time-option')){
+      const active=option.dataset.value===selected;
+      option.classList.toggle('selected',active);
+      if(active)wheel.scrollTop=option.offsetTop-wheel.offsetTop-(wheel.clientHeight/2)+(option.clientHeight/2);
+    }
+  }
 }
 
 function nyParts(date){
@@ -314,6 +398,7 @@ function setDateTimeFields(prefix,date){
   const p=nyParts(date);
   document.getElementById(prefix+'Date').value=`${p.year}-${p.month}-${p.day}`;
   document.getElementById(prefix+'Time').value=`${p.hour}:${p.minute}`;
+  updateTimePicker(prefix,`${p.hour}:${p.minute}`);
 }
 function nyOffsetMs(utcMs){
   const p=nyParts(new Date(utcMs));
